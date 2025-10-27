@@ -175,7 +175,6 @@ async function loadAndRenderData() {
         }
 
         // 3. Ocultar mensaje de carga y mostrar dashboard
-        statusMessage.textContent = '✅ Datos cargados con éxito.';
         statusMessage.classList.add('text-green-500', 'font-bold');
         statusMessage.classList.remove('animate-pulse', 'text-blue-500');
         dashboardContent.classList.remove('hidden');
