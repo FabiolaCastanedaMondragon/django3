@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard de Detección de Malware (Random Forest)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<style>
+    /* FUENTES Y FONDO */
+    body {
+        font-family: 'Inter', sans-serif;
+        background: linear-gradient(135deg, #e0f2fe, #fef3c7);
+        color: #1f2937;
+        min-height: 100vh;
+    }
+
+    /* CARD GLASSMORPHISM FUTURISTA */
+    .glass-card {
+        background: rgba(255, 255, 255, 0.85);
+        backdrop-filter: blur(16px);
+        border: 1px solid rgba(0, 0, 0, 0.1);
+        border-radius: 1rem;
+        box-shadow: 0 12px 24px rgba(0,0,0,0.1);
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+    .glass-card:hover {
+        transform: translateY(-6px);
+        box-shadow: 0 16px 32px rgba(0,0,0,0.15);
+    }
+
+    /* TITULOS MODERNOS */
+    .section-title {
+        font-size: 1.75rem;
+        font-weight: 700;
+        background: linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 1rem;
+    }
+
+    /* BARRAS Y BOTONES */
+    /* El estilo 'f1-score-bar' utiliza colores azules/morados */
+    .f1-score-bar {
+        background: linear-gradient(90deg, #8b5cf6, #3b82f6, #06b6d4);
+        height: 1rem;
+        border-radius: 9999px;
+        transition: width 0.8s ease;
+    }
+
+    /* TABLA MODERNA */
+    table {
+        border-collapse: separate;
+        border-spacing: 0;
+        border-radius: 0.75rem;
+        overflow: hidden;
+        width: 100%;
+        font-size: 0.875rem;
+    }
+    th {
+        background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+        color: #ffffff;
+        font-weight: 600;
+        text-transform: uppercase;
+        padding: 0.75rem 1rem;
+    }
+    td {
+        background: rgba(255,255,255,0.9);
+        color: #1f2937;
+        padding: 0.75rem 1rem;
+    }
+    tr:hover td {
+        background: rgba(59,130,246,0.15);
+    }
+
+    /* CANVAS */
+    canvas {
+        background: rgba(255,255,255,0.3);
+        border-radius: 1rem;
+        box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+    }
+</style>
+</head>
+<body class="flex flex-col">
+
+<div class="container mx-auto p-6 md:p-10">
+    <header class="text-center mb-10">
+        <h1 class="text-5xl font-extrabold section-title tracking-tight mb-3">
+            🛡️ Dashboard de Malware Android
+        </h1>
+        <p class="text-lg text-gray-700">Resultados del Clasificador Random Forest (Datos pre-calculados)</p>
+    </header>
+
+    <div id="status-message" class="text-center py-5 text-xl font-semibold text-blue-500 animate-pulse">
+        ⏳ Cargando datos del API de Django...
+    </div>
+
+    <main id="dashboard-content" class="hidden grid gap-12 md:grid-cols-12">
+
+        <!-- GRÁFICA DE SEPARABILIDAD -->
+        <div class="glass-card md:col-span-7 p-8 border-t-4 border-gradient-to-r from-purple-500 via-pink-500 to-red-500">
+            <h2 class="section-title">🧠 Separabilidad de Datos</h2>
+            <div class="relative h-96">
+                <canvas id="separabilityChart"></canvas>
+            </div>
+            <p class="mt-4 text-gray-700 text-sm">
+                La línea negra diagonal es la frontera de decisión. Los puntos azules (Benigno) y rojos (Malware) están dispersos.
+            </p>
+        </div>
+
+        <!-- MÉTRICAS DE PRECISIÓN (Solo F1 Score) -->
+        <div class="glass-card md:col-span-5 p-8 border-t-4 border-gradient-to-r from-blue-500 via-purple-500 to-pink-500 flex flex-col justify-between">
+            <h2 class="section-title">📊 F1 Score del Modelo</h2>
+            <p class="text-gray-700 text-lg mb-6">Métrica de Evaluación del Modelo Random Forest:</p>
+            
+            <!-- F1 Score (Única Métrica Visible) -->
+            <div>
+                <p class="text-gray-600 font-semibold mb-2">F1 Score (Ponderado):</p>
+                <div class="flex items-center justify-between mb-2">
+                    <span id="f1-score-value" class="px-3 py-1 bg-purple-100 text-purple-700 font-extrabold text-xl rounded-md shadow-md">--</span>
+                </div>
+                <div class="w-full rounded-full overflow-hidden bg-gray-200 shadow-inner">
+                    <div id="f1-score-bar" class="f1-score-bar" style="width:0%;"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TABLA DE DATOS -->
+        <div class="glass-card md:col-span-12 p-8 border-t-4 border-gradient-to-r from-pink-500 via-red-500 to-yellow-500">
+            <h2 class="section-title">📁 Vista del Dataset (Muestra de 100 filas)</h2>
+            <div class="overflow-x-auto rounded-xl shadow-inner">
+                <table id="dataframe-table">
+                    <thead></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+
+    </main>
+</div>
+
+<script>
+const API_ENDPOINT = '/api/malware/';
+
+async function loadAndRenderData() {
+    const statusMessage = document.getElementById('status-message');
+    const dashboardContent = document.getElementById('dashboard-content');
+    try {
+        const response = await fetch(API_ENDPOINT);
+        if (!response.ok) {
+            const errorText = await response.text();
+            let errorMessage = `Error HTTP: ${response.status}. Servidor: ${errorText.substring(0, 50)}...`;
+            throw new Error(errorMessage);
+        }
+        const data = await response.json();
+        
+        // El backend ahora solo devuelve f1_score
+        const f1_score_value = data.metrics.f1_score;
+        
+        // Validación corregida: Solo chequea por f1_score
+        if (typeof f1_score_value !== 'number') {
+            throw new Error("El JSON no contiene el campo 'f1_score' con formato numérico dentro de 'metrics'.");
+        }
+
+        // 1. Mostrar F1 Score
+        document.getElementById('f1-score-value').textContent = f1_score_value.toFixed(4);
+        document.getElementById('f1-score-bar').style.width = (f1_score_value * 100).toFixed(2) + '%';
+        
+        // 2. Renderizar Gráfica y Tabla (usando las claves snake_case correctas)
+        if (data.separability_data) {
+            renderSeparabilityChart(data.separability_data);
+        }
+        if (data.dataframe_sample) {
+            renderDataFrame(data.dataframe_sample);
+        }
+
+        // 3. Ocultar mensaje de carga y mostrar dashboard
+        statusMessage.textContent = '✅ Datos cargados con éxito.';
+        statusMessage.classList.add('text-green-500', 'font-bold');
+        statusMessage.classList.remove('animate-pulse', 'text-blue-500');
+        dashboardContent.classList.remove('hidden');
+
+    } catch (error) {
+        console.error("Error al cargar datos:", error);
+        statusMessage.textContent = `❌ Error al cargar datos: ${error.message}. Verifica la consola, el JSON y el servidor Django.`;
+        statusMessage.classList.add('text-red-500');
+        statusMessage.classList.remove('text-blue-500', 'animate-pulse');
+    }
+}
+
+// GRÁFICA DIAGONAL CON PUNTOS DISPERSOS
+function renderSeparabilityChart(sepData){
+    const ctx = document.getElementById('separabilityChart').getContext('2d');
+    
+    // Usamos los datos crudos y generamos la distribución (como en tu código original)
+    if (!sepData.x_points || !sepData.y_points || !sepData.labels) {
+        console.error("Faltan campos (x_points, y_points, labels) para renderizar la gráfica de dispersión.");
+        return;
+    }
+
+    const minX = Math.min(...sepData.x_points);
+    const maxX = Math.max(...sepData.x_points);
+    const minY = Math.min(...sepData.y_points);
+    const maxY = Math.max(...sepData.y_points);
+
+    const boundaryLine = [{x:minX,y:minY},{x:maxX,y:maxY}];
+    const benign=[], malware=[];
+    const spread = 0.15*(maxY-minY);
+
+    sepData.x_points.forEach((x,i)=>{
+        const lineY = minY + ((maxY-minY)*(x-minX))/(maxX-minX);
+        const offset = (Math.random()-0.5)*spread*2;
+        const y = lineY + offset;
+        // La etiqueta es 0 (Benigno) o 1 (Malware)
+        if(sepData.labels[i]===0) benign.push({x,y});
+        else malware.push({x,y});
+    });
+
+    if(window.separabilityChartInstance) window.separabilityChartInstance.destroy();
+
+    window.separabilityChartInstance = new Chart(ctx,{
+        type:'scatter',
+        data:{
+            datasets:[
+                {label:'Frontera de Decisión', data:boundaryLine, type:'line', borderColor:'black', borderWidth:2, pointRadius:6, pointStyle:'dash'},
+                {label:'Benigno (0)', data:benign, backgroundColor:'rgba(59,130,246,0.9)', pointRadius:6, pointStyle:'circle'},
+                {label:'Malware (1)', data:malware, backgroundColor:'rgba(239,68,68,0.9)', pointRadius:6, pointStyle:'triangle'}
+            ]
+        },
+        options:{
+            responsive:true,
+            maintainAspectRatio:false,
+            scales:{
+                x:{ title:{display:true,text:'Duration (Escalado)', color:'#1f2937'}, grid:{color:'rgba(0,0,0,0.05)'} },
+                y:{ title:{display:true,text:'Total Fpackets (Escalado)', color:'#1f2937'}, grid:{color:'rgba(0,0,0,0.05)'} }
+            },
+            plugins:{ legend:{position:'top', labels:{color:'#1f2937'}} }
+        }
+    });
+}
+
+function renderDataFrame(dfData){
+    const table=document.getElementById('dataframe-table');
+    const thead=table.querySelector('thead'); const tbody=table.querySelector('tbody');
+    thead.innerHTML=''; tbody.innerHTML='';
+    if(dfData.length>0){
+        const cols=Object.keys(dfData[0]);
+        const tr=document.createElement('tr');
+        cols.forEach(c=>{ const th=document.createElement('th'); th.textContent=c; tr.appendChild(th); });
+        thead.appendChild(tr);
+        dfData.forEach(r=>{
+            const trb=document.createElement('tr'); trb.className='hover:bg-blue-100/20';
+            cols.forEach(c=>{ 
+                const td=document.createElement('td'); 
+                // Asegurar el formato de 4 decimales
+                const value = r[c];
+                if (c.includes('PREDICCION')) {
+                    const isMalware = value === true || value === 1;
+                    td.textContent = isMalware ? '1 (Malware)' : '0 (Benigno)';
+                    td.classList.add('font-bold');
+                    td.classList.add(isMalware ? 'text-red-600' : 'text-green-600');
+                } else if (c === 'CLASE') {
+                    // Etiqueta real (0/1)
+                    const isMalware = value === 1;
+                    td.textContent = isMalware ? '1' : '0';
+                    td.classList.add('font-bold');
+                    td.classList.add(isMalware ? 'text-red-600' : 'text-green-600');
+                } else {
+                    td.textContent = typeof value === 'number' ? value.toFixed(4) : value;
+                }
+                trb.appendChild(td); 
+            });
+            tbody.appendChild(trb);
+        });
+    }
+}
+
+window.onload = loadAndRenderData;
+</script>

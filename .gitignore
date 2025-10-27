@@ -1,0 +1,11 @@
+malware_project/analysis/TotalFeatures-ISCXFlowMeter.csv
+
+# Opcionalmente, puedes ignorar todos los archivos .csv en esa carpeta si son datasets
+# malware_project/analysis/*.csv 
+
+# Archivos comunes de Django a ignorar
+*.pyc
+__pycache__/
+db.sqlite3
+.env
+/venv/
